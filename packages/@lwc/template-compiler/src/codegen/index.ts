@@ -40,27 +40,6 @@ import {
     isSvgUseHref,
 } from '../parser/attribute';
 
-const DISALLOWED_LWC_DIRECTIVES = new Set(['dynamic']);
-
-function generateContext(element: IRElement, data: t.Property[]) {
-    const { lwc } = element;
-    const contextExpressions: t.Property[] = [];
-
-    // LWC
-    if (lwc) {
-        const lwcObject = Object.keys(lwc)
-            .filter((key) => !DISALLOWED_LWC_DIRECTIVES.has(key))
-            .map((key) => {
-                return t.property(t.identifier(key), t.literal((lwc as any)[key]));
-            });
-
-        const lwcObj = t.property(t.identifier('lwc'), t.objectExpression(lwcObject));
-        contextExpressions.push(lwcObj);
-    }
-
-    data.push(t.property(t.identifier('context'), t.objectExpression(contextExpressions)));
-}
-
 function transform(root: IRElement, codeGen: CodeGen, state: State): t.Expression {
     function transformElement(element: IRElement): t.Expression {
         const databag = elementDataBag(element);
@@ -405,13 +384,45 @@ function transform(root: IRElement, codeGen: CodeGen, state: State): t.Expressio
         }
 
         // Properties
+        const propsObj = t.objectExpression([]);
+
+        // Properties: standard props
         if (props) {
-            const propsObj = objectToAST(props, (key) => computeAttrValue(props[key], element));
+            for (const [key, value] of Object.entries(props)) {
+                propsObj.properties.push(
+                    t.property(t.identifier(key), computeAttrValue(value, element))
+                );
+            }
+        }
+
+        // Properties: lwc:inner-html directive
+        if (lwc?.innerHTML) {
+            const expr =
+                typeof lwc.innerHTML === 'string'
+                    ? t.literal(lwc.innerHTML)
+                    : bindExpression(lwc.innerHTML, element);
+
+            propsObj.properties.push(
+                t.property(
+                    t.identifier('innerHTML'),
+                    t.callExpression(t.identifier('sanitizeHtmlContent'), [expr])
+                )
+            );
+        }
+
+        if (propsObj.properties.length) {
             data.push(t.property(t.identifier('props'), propsObj));
         }
 
-        if (lwc) {
-            generateContext(element, data);
+        // Context
+        if (lwc?.dom || lwc?.innerHTML) {
+            const contextObj = t.objectExpression([
+                t.property(
+                    t.identifier('lwc'),
+                    t.objectExpression([t.property(t.identifier('dom'), t.literal('manual'))])
+                ),
+            ]);
+            data.push(t.property(t.identifier('context'), contextObj));
         }
 
         // Key property on VNode
